@@ -1,4 +1,5 @@
-import java.io.*;
+import java.io.File;
+import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.file.Files;
@@ -7,97 +8,67 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 
 class BusyboxLauncher {
-    private static final String BUSYBOX_PATH = "bin/busybox";
-    private static final String X86_64_URL = "https://github.com/d0m-1k/BusyboxLauncher/raw/main/busybox/busybox-x86_64.bin";
-    private static final String AARCH64_URL = "https://github.com/d0m-1k/BusyboxLauncher/raw/main/busybox/busybox-aarch64.bin";
 
-    public static void main(String[] args) throws IOException, InterruptedException {
-        File busyboxFile = new File(BUSYBOX_PATH);
-        
-        if (!busyboxFile.exists()) {
-            String architecture = getNormalizedArchitecture();
-            String downloadUrl = getDownloadUrl(architecture);
-            downloadBusybox(downloadUrl, busyboxFile);
-            setExecutable(busyboxFile);
-        }
+	public static void main(String[] args) {
+		try {
+			String arch = getNormalizedArch();
+			String url = getDownloadUrl(arch);
+			
+			Path outputPath = Paths.get("bin", "busybox");
+			Files.createDirectories(outputPath.getParent());
 
-        startShell();
-    }
+			downloadFile(url, outputPath);
+			
+			setExecutable(outputPath.toFile());
+			
+			runBusybox(outputPath.toString());
 
-    private static String getNormalizedArchitecture() {
-        String arch = System.getProperty("os.arch").toLowerCase();
-        if (arch.contains("aarch64")) return "aarch64";
-        if (arch.contains("amd64") || arch.contains("x86_64")) return "x86_64";
-        return arch;
-    }
+		} catch (Exception e) {
+			e.printStackTrace();
+			System.exit(1);
+		}
+	}
 
-    private static String getDownloadUrl(String architecture) throws IOException {
-        switch (architecture) {
-            case "x86_64": return X86_64_URL;
-            case "aarch64": return AARCH64_URL;
-            default: throw new IOException("Неподдерживаемая архитектура: " + architecture);
-        }
-    }
+	private static String getNormalizedArch() {
+		String arch = System.getProperty("os.arch").toLowerCase();
+		if (arch.contains("aarch64") || arch.contains("arm64")) {
+			return "aarch64";
+		}
+		return "x86_64";
+	}
 
-    private static void downloadBusybox(String urlStr, File targetFile) throws IOException {
-        URL url = new URL(urlStr);
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        connection.setRequestMethod("GET");
+	private static String getDownloadUrl(String arch) {
+		return "https://github.com/d0m-1k/BusyboxLauncher/raw/refs/tags/v1.0.0/busybox/busybox-" + arch + ".bin";
+	}
 
-        System.out.println("Скачивание busybox для " + getNormalizedArchitecture() + "...");
-        
-        Path targetPath = Paths.get(targetFile.getParent());
-        if (!Files.exists(targetPath)) {
-            Files.createDirectories(targetPath);
-        }
+	private static void downloadFile(String url, Path outputPath) throws IOException {
+		URL downloadUrl = new URL(url);
+		HttpURLConnection connection = (HttpURLConnection) downloadUrl.openConnection();
+		connection.setRequestMethod("GET");
 
-        try (InputStream in = connection.getInputStream()) {
-            Files.copy(in, targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        }
-        
-        System.out.println("Файл сохранён: " + targetFile.getAbsolutePath());
-    }
+		if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+			throw new IOException("Ошибка при скачивании: HTTP " + connection.getResponseCode());
+		}
 
-    private static void setExecutable(File file) throws IOException {
-        if (!file.setExecutable(true)) {
-            throw new IOException("Ошибка установки прав на выполнение");
-        }
-    }
+		Files.copy(connection.getInputStream(), outputPath, StandardCopyOption.REPLACE_EXISTING);
+		System.out.println("BusyBox успешно скачан в " + outputPath);
+	}
 
-    private static void startShell() throws IOException, InterruptedException {
-        Process process = new ProcessBuilder(BUSYBOX_PATH, "sh").start();
+	private static void setExecutable(File file) throws SecurityException {
+		if (!file.setExecutable(true)) {
+			throw new SecurityException("Не удалось установить права на выполнение");
+		}
+		System.out.println("Права на выполнение установлены");
+	}
 
-        redirectStream(process.getInputStream(), System.out);
-        redirectStream(process.getErrorStream(), System.err);
-
-        Thread inputThread = new Thread(() -> {
-            try (OutputStream processOut = process.getOutputStream()) {
-                int c;
-                while ((c = System.in.read()) != -1) {
-                    processOut.write(c);
-                    processOut.flush();
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        });
-        inputThread.start();
-
-        process.waitFor();
-        inputThread.join();
-    }
-
-    private static void redirectStream(InputStream in, PrintStream out) {
-        new Thread(() -> {
-            try {
-                int c;
-                while ((c = in.read()) != -1) {
-                    out.write(c);
-                    out.flush();
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }).start();
-    }
+	private static void runBusybox(String path) throws IOException, InterruptedException {
+		ProcessBuilder pb = new ProcessBuilder(path, "sh")
+			.inheritIO()
+			.directory(new File(System.getProperty("user.dir")));
+		
+		System.out.println("Запускаем BusyBox...");
+		Process process = pb.start();
+		int exitCode = process.waitFor();
+		System.out.println("BusyBox завершил работу с кодом: " + exitCode);
+	}
 }
